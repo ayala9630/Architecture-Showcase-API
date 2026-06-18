@@ -2,6 +2,7 @@ using System.Text.Json;
 using Confluent.Kafka;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using MailKit.Net.Smtp;
 using MimeKit;
 using System.Net.Security;
@@ -10,18 +11,13 @@ using System.Security.Cryptography.X509Certificates;
 public class KafkaConsumerService : BackgroundService
 {
     private readonly ILogger<KafkaConsumerService> _logger;
+    private readonly EmailSettings _emailSettings;
     private IConsumer<Ignore, string>? _consumer;
 
-    // Email settings - update these or load from config
-    private const string SmtpServer = "smtp.gmail.com";
-    private const int SmtpPort = 587;
-    private const string SenderEmail = "your-email@gmail.com";
-    private const string SenderPassword = "your-app-password";
-    private const string SenderName = "ChineseSaleApi";
-
-    public KafkaConsumerService(ILogger<KafkaConsumerService> logger)
+    public KafkaConsumerService(ILogger<KafkaConsumerService> logger, IOptions<EmailSettings> emailOptions)
     {
         _logger = logger;
+        _emailSettings = emailOptions?.Value ?? throw new ArgumentNullException(nameof(emailOptions));
 
         var config = new ConsumerConfig
         {
@@ -106,13 +102,15 @@ public class KafkaConsumerService : BackgroundService
         try
         {
             var message = new MimeMessage();
-            message.From.Add(new MailboxAddress(SenderName, SenderEmail));
+            message.From.Add(new MailboxAddress(_emailSettings.SenderName, _emailSettings.SenderEmail));
             message.To.Add(new MailboxAddress("", emailEvent.To));
             message.Subject = emailEvent.Subject;
             message.Body = new TextPart("html") { Text = emailEvent.Body };
 
             using (var client = new SmtpClient())
             {
+                // Set validation callback BEFORE connecting.
+                // Accept only when there are no errors or when the only chain problem is revocation-check failures.
                 client.ServerCertificateValidationCallback = (sender, certificate, chain, sslPolicyErrors) =>
                 {
                     if (sslPolicyErrors == SslPolicyErrors.None)
@@ -133,8 +131,8 @@ public class KafkaConsumerService : BackgroundService
                     return false;
                 };
 
-                client.Connect(SmtpServer, SmtpPort, MailKit.Security.SecureSocketOptions.StartTls);
-                client.Authenticate(SenderEmail, SenderPassword);
+                client.Connect(_emailSettings.SmtpServer, _emailSettings.SmtpPort, MailKit.Security.SecureSocketOptions.Auto);
+                client.Authenticate(_emailSettings.SenderEmail, _emailSettings.Password);
                 client.Send(message);
                 client.Disconnect(true);
             }
@@ -157,3 +155,11 @@ public class EmailEvent
     public DateTime CreatedAt { get; set; }
 }
 
+    public class EmailSettings
+    {
+        public string SmtpServer { get; set; } = string.Empty;
+        public int SmtpPort { get; set; }
+        public string SenderName { get; set; } = string.Empty;
+        public string SenderEmail { get; set; } = string.Empty;
+        public string Password { get; set; } = string.Empty;
+    }

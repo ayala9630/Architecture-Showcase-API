@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 var host = Host.CreateDefaultBuilder(args)
     .ConfigureServices((context, services) =>
     {
+        services.Configure<EmailSettings>(context.Configuration.GetSection("EmailSettings"));
         services.AddHostedService<KafkaConsumerService>();
     })
     .ConfigureLogging(logging =>
