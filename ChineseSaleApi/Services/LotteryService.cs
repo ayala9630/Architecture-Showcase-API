@@ -19,6 +19,7 @@ namespace ChineseSaleApi.Services
         private readonly IGiftRepository _giftRepository;
         private readonly IMapper _mapper;
         private readonly ILogger<LotteryService> _logger;
+        private readonly IKafkaProducerService? _kafkaProducer;
         private readonly RedisCacheService _cache;
         private readonly CacheSettings _cacheSettings;
 
@@ -32,6 +33,7 @@ namespace ChineseSaleApi.Services
             ILogger<LotteryService> logger,
             RedisCacheService cache,
             IOptions<CacheSettings> cacheSettings
+            , IKafkaProducerService? kafkaProducer = null
             )
         {
             _repository = repository;
@@ -40,6 +42,7 @@ namespace ChineseSaleApi.Services
             _giftRepository = giftRepository;
             _mapper = mapper;
             _logger = logger;
+            _kafkaProducer = kafkaProducer;
             _cache = cache;
             _cacheSettings = cacheSettings.Value;
         }
@@ -272,6 +275,20 @@ namespace ChineseSaleApi.Services
             {
                 card.IsWin = true;
                 await _cardRepository.UpdateCardToWin(card);
+                if (_kafkaProducer != null)
+                {
+                    var evt = new TransactionCreatedEvent
+                    {
+                        TransactionId = Guid.NewGuid(),
+                        UserId = card.UserId,
+                        CustomerEmail = null,
+                        Amount = 0,
+                        CreatedAt = DateTime.UtcNow,
+                        TransactionType = "LotteryWin",
+                        Payload = new { CardId = card.Id, GiftId = card.GiftId }
+                    };
+                    _ = _kafkaProducer.PublishAsync(System.Text.Json.JsonSerializer.Serialize(evt));
+                }
                 return true;
             }
             catch (Exception ex)

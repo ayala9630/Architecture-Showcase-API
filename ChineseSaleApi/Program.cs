@@ -17,6 +17,8 @@ using System.Threading.RateLimiting;
 using ChineseSaleApi.Dto;
 using MailKit;
 using ChineseSaleApi.Middleware;
+using ChineseSaleApi.Settings;
+using Confluent.Kafka;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -115,6 +117,17 @@ builder.Services.AddScoped<RedisCacheService>();
 builder.Services.Configure<EmailSettingsDto>(builder.Configuration.GetSection("EmailSettings"));
 builder.Services.AddScoped<IEmailService,EmailService>();
 //builder.Services.AddTransient<EmailService>(); // Register your EmailService for injection
+
+// Kafka configuration
+builder.Services.Configure<KafkaSettings>(builder.Configuration.GetSection("Kafka"));
+var kafkaSettings = builder.Configuration.GetSection("Kafka").Get<KafkaSettings>();
+if (kafkaSettings != null)
+{
+    var producerConfig = new ProducerConfig { BootstrapServers = kafkaSettings.BootstrapServers };
+    builder.Services.AddSingleton(producerConfig);
+    builder.Services.AddSingleton<IProducer<Null, string>>(sp => new ProducerBuilder<Null, string>(producerConfig).Build());
+    builder.Services.AddScoped<IKafkaProducerService, KafkaProducerService>();
+}
 
 
 var jwtSettings = builder.Configuration.GetSection("JwtSettings");

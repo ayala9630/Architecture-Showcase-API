@@ -20,17 +20,19 @@ namespace ChineseSaleApi.Services
         private readonly ITokenService _tokenService;
         private readonly IConfiguration _configuration;
         private readonly IEmailService _emailService;
+        private readonly IKafkaProducerService? _kafkaProducer;
         private readonly IMapper _mapper;
         private readonly ILogger<UserService> _logger;
 
         public UserService(
-            IEmailService emailService,
+          IEmailService emailService,
             IUserRepository repository,
             IAddressService addressService,
             ITokenService tokenService,
             IConfiguration configuration,
             IMapper mapper,
-            ILogger<UserService> logger
+            ILogger<UserService> logger,
+            IKafkaProducerService? kafkaProducer = null
         )
         {
             _tokenService = tokenService;
@@ -40,6 +42,7 @@ namespace ChineseSaleApi.Services
             _emailService = emailService;
             _mapper = mapper;
             _logger = logger;
+            _kafkaProducer = kafkaProducer;
         }
 
         // create
@@ -57,13 +60,35 @@ namespace ChineseSaleApi.Services
                 user.Password = HashPassword(createUserDto.Password);
                 user.AddressId = idAddress;
 
-                //send welcome email(synchronous method in your EmailService)
-                   _emailService.SendEmail(new EmailRequestDto()
+                // publish welcome email event to Kafka
+                if (_kafkaProducer != null)
                 {
+                  var emailEvent = new EmailEvent
+                  {
+                    EventId = Guid.NewGuid(),
                     To = createUserDto.Email,
                     Subject = "ברוכים הבאים ל‑Chinese Sale — הרשמתך להגרלה",
-                    Body = BuildWelcomeHtml(createUserDto.FirstName)
-                });
+                    Body = BuildWelcomeHtml(createUserDto.FirstName),
+                    CreatedAt = DateTime.UtcNow
+                  };
+                  _ = _kafkaProducer.PublishAsync(System.Text.Json.JsonSerializer.Serialize(emailEvent), "email-events");
+                }
+
+                // publish transaction event to Kafka
+                if (_kafkaProducer != null)
+                {
+                  var evt = new TransactionCreatedEvent
+                  {
+                    TransactionId = Guid.NewGuid(),
+                    UserId = null,
+                    CustomerEmail = createUserDto.Email,
+                    Amount = 0,
+                    CreatedAt = DateTime.UtcNow,
+                    TransactionType = "UserRegistered",
+                    Payload = new { Username = createUserDto.Username }
+                  };
+                  _ = _kafkaProducer.PublishAsync(System.Text.Json.JsonSerializer.Serialize(evt), "transaction-events");
+                }
 
                 await _repository.AddUser(user);
             }
@@ -224,13 +249,35 @@ namespace ChineseSaleApi.Services
                 var token = _tokenService.GenerateToken(user.Id, user.Email, user.FirstName, user.LastName, user.IsAdmin);
                 var expiryMinutes = _configuration.GetValue<int>("JwtSettings:ExpiryMinutes", 60);
 
-                // send login notification
-                _emailService.SendEmail(new EmailRequestDto()
+// publish login notification email event to Kafka
+                if (_kafkaProducer != null)
                 {
-                    To = user.Email,
-                    Subject = "התראת כניסה — Chinese Sale",
-                    Body = BuildLoginNotificationHtml(user.FirstName, DateTime.UtcNow)
-                });
+                    var emailEvent = new EmailEvent
+                    {
+                        EventId = Guid.NewGuid(),
+                        To = user.Email,
+                        Subject = "התראת כניסה — Chinese Sale",
+                        Body = BuildLoginNotificationHtml(user.FirstName, DateTime.UtcNow),
+                        CreatedAt = DateTime.UtcNow
+                    };
+                    _ = _kafkaProducer.PublishAsync(System.Text.Json.JsonSerializer.Serialize(emailEvent), "email-events");
+                }
+
+                // publish login event to Kafka
+                if (_kafkaProducer != null)
+                {
+                    var evt = new TransactionCreatedEvent
+                    {
+                        TransactionId = Guid.NewGuid(),
+                        UserId = user.Id,
+                        CustomerEmail = user.Email,
+                        Amount = 0,
+                        CreatedAt = DateTime.UtcNow,
+                        TransactionType = "UserLogin",
+                        Payload = new { UserName = user.UserName }
+                    };
+                    _ = _kafkaProducer.PublishAsync(System.Text.Json.JsonSerializer.Serialize(evt), "transaction-events");
+                }
 
                 _logger.LogInformation($"User {user.UserName} logged in successfully.");
 
